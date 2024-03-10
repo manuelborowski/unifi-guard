@@ -1,16 +1,18 @@
-import os, pandas, sys, logging, logging.handlers, yaml
+import os, pandas, sys, logging, logging.handlers, yaml, datetime
 import argparse, json
 from unifiapi.api import controller, UnifiApiError
 
 # 1.0 initial version
+# 1.1 added overwrite parameter, so that it is possible to define groups and set parameters on group-level.  Take radio 6e into account
 
-version = 1.0
+version = 1.1
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--save", help="Create the excel file", action="store_true")
 parser.add_argument("--live", help="Check if there are differences between the controller and excel file and update the controller if required", action="store_true")
-parser.add_argument("--dump", help="Dump the devices in a json file", action="store_true")
+parser.add_argument("--overwrite", help="Use overwrite.json to overwrite parameters of selected AP's", action="store_true")
 parser.add_argument("--dryrun", help="Do not apply differences to the controller", action="store_true")
+parser.add_argument("--dump", help="Dump the devices in a json file", action="store_true")
 parser.add_argument("--version", help="Return version", action="store_true")
 args = parser.parse_args()
 
@@ -50,35 +52,23 @@ def get_devices(site):
         raise e
 
 
-# from a list of devices, filter the uaps and from each uap retreive only relevant info
+radio_params = [("channel", "auto", lambda x: x), ("ht", "",  lambda x: str(x)), ("tx_power_mode", "", lambda x: x), ("tx_power", "", lambda x: int(x)),
+                                                                                  ("min_rssi_enabled", "", lambda x: x == 1.0), ("min_rssi", "", lambda x: int(x))]
+radio_types = ["ng", "na", "6e"]
+
+# from a list of devices, filter the uaps and from each uap retrieve only relevant info
 def get_filtered_uaps(devices):
     try:
         filtered_devices = []
         for d in devices:
             if "UAP" in d["name"]:
-                if d["radio_table"][0]["radio"] == "ng":
-                    radio_2 = d["radio_table"][0]
-                    radio_5 = d["radio_table"][1]
-                else:
-                    radio_2 = d["radio_table"][1]
-                    radio_5 = d["radio_table"][0]
-                filtered_devices.append({
-                    "name": d["name"],
-                    "state": d["state"],
-                    "2_channel": radio_2["channel"],
-                    "2_ht": radio_2["ht"],
-                    "2_tx_power_mode": radio_2["tx_power_mode"] if "tx_power_mode" in radio_2 else '',
-                    "2_tx_power": radio_2["tx_power"] if "tx_power" in radio_2 else '',
-                    "2_min_rssi_enabled": radio_2["min_rssi_enabled"] if "min_rssi_enabled" in radio_2 else '',
-                    "2_min_rssi": radio_2["min_rssi"] if "min_rssi" in radio_2 else '',
-                    "5_channel": radio_5["channel"],
-                    "5_ht": radio_5["ht"],
-                    "5_tx_power_mode": radio_5["tx_power_mode"] if "tx_power_mode" in radio_5 else '',
-                    "5_tx_power": radio_5["tx_power"] if "tx_power" in radio_5 else '',
-                    "5_min_rssi_enabled": radio_5["min_rssi_enabled"] if "min_rssi_enabled" in radio_5 else '',
-                    "5_min_rssi": radio_5["min_rssi"] if "min_rssi" in radio_5 else '',
-                    "id": d["_id"],
-                })
+                data ={"name": d["name"], "state": d["state"], "id": d["_id"]}
+                for r in d["radio_table"]:
+                    prefix = r["radio"]
+                    for p in radio_params:
+                        data[f"{prefix}_{p[0]}"] = r[p[0]] if p[0] in r else p[1]
+                data.update({ "name": d["name"], "state": d["state"], "id": d["_id"]})
+                filtered_devices.append(data)
         log.info(f"Retreived {len(filtered_devices)} UAPS from UNIFI controller")
         return filtered_devices
     except Exception as e:
@@ -106,12 +96,13 @@ if args.dump:
 # Get the device-configurations and store in a excel file
 if args.save:
     try:
-        log.info("Start creating excel file")
+        now = datetime.datetime.now().strftime("%Y%m%d%H%M")
+        log.info(f"Start creating excel file, {now}")
         site = init_api()
         devices = get_devices(site)
         live_uaps = get_filtered_uaps(devices)
         data_frame = pandas.DataFrame(data=live_uaps)
-        data_frame.to_excel("uap_devices.xlsx", index=False)
+        data_frame.to_excel(f"uap_devices-{now}.xlsx", index=False)
         log.info(f"Done creating excel file, {len(live_uaps)} UAPs")
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
@@ -126,15 +117,31 @@ if args.live:
         devices = get_devices(site)
         live_uaps = get_filtered_uaps(devices)
         live_uap_cache = {u["id"]: u for u in live_uaps}
-        data_frame = pandas.read_excel("uap_devices.xlsx",
-                                       converters={"2_min_rssi_enabled": lambda x: x == 1.0, "5_min_rssi_enabled": lambda x: x == 1.0, "2_ht": lambda x: str(x),
-                                                   "5_ht": lambda x: str(x), "2_tx_power": lambda x: int(x), "5_tx_power": lambda x: int(x),
-                                                   "2_min_rssi": lambda x: int(x), "5_min_rssi": lambda x: int(x), "state": lambda x: x == 1
-                                                   })
+        converters = {}
+        for rp in radio_params:
+            for rt in radio_types:
+                converters[f"{rt}_{rp[0]}"] = rp[2]
+        data_frame = pandas.read_excel("uap_devices.xlsx", converters=converters)
         saved_uaps = data_frame.to_dict(orient="records")
         saved_uap_cache = {u["id"]: u for u in saved_uaps}
         log.info(f"Retreived {len(saved_uaps)} from excel file")
         # for all saved UAPs, check if there are differences with the live UAPs.  If so, store for later processing
+        overwrite_uaps = {}
+        if args.overwrite:
+            log.info("Using info in overwrite.json")
+            with open("overwrite.json", "r") as overwrite_file:
+                overwrite_data = json.load(overwrite_file)
+                uap_to_group = {}
+                for g in overwrite_data["groups"]:
+                    for uap in g["items"]:
+                        if uap in uap_to_group:
+                            uap_to_group[uap].append(g["tag"])
+                        else:
+                            uap_to_group[uap] = [g["tag"]]
+                if uap_to_group:
+                    overwrite_uaps["uaps"] = uap_to_group
+                    overwrite_uaps["settings"] = overwrite_data["settings"]
+
         update_uaps = {}
         nbr_not_live_uaps = 0
         for saved_uap in saved_uaps:
@@ -144,16 +151,19 @@ if args.live:
             if saved_uap["id"] in live_uap_cache:
                 live_uap = live_uap_cache[saved_uap["id"]]
                 keys = list(saved_uap.keys())
-                if saved_uap["2_tx_power_mode"] != "custom":
-                    keys.remove("2_tx_power")
-                if not saved_uap["2_min_rssi_enabled"]:
-                    keys.remove("2_min_rssi")
-                if saved_uap["5_tx_power_mode"] != "custom":
-                    keys.remove("5_tx_power")
-                if not saved_uap["5_min_rssi_enabled"]:
-                    keys.remove("5_min_rssi")
+
+                for rt in radio_types:
+                    if saved_uap[f"{rt}_tx_power_mode"] != "custom":
+                        keys.remove(f"{rt}_tx_power")
+                    if not saved_uap[f"{rt}_min_rssi_enabled"]:
+                        keys.remove(f"{rt}_min_rssi")
+                if overwrite_uaps and saved_uap["name"] in overwrite_uaps["uaps"]:
+                    for g in overwrite_uaps["uaps"][saved_uap["name"]]:
+                        for s in overwrite_uaps["settings"][g]:
+                            if s["active"]:
+                                saved_uap[s["setting"]] = s["value"]
                 for key in keys:
-                    if saved_uap[key] != live_uap[key]:
+                    if key in live_uap and str(saved_uap[key]) != str(live_uap[key]):
                         log.info(f"Difference in UAP settings, UAP {saved_uap['name']}, KEY {key}, SAVED {saved_uap[key]}, LIVE {live_uap[key]}")
                         if saved_uap["id"] in update_uaps:
                             update_uaps[saved_uap["id"]][key] = saved_uap[key]
@@ -178,21 +188,24 @@ if args.live:
             id_and_radio = {}
             for id, update_radio in update_uaps.items():
                 uap_radio_table = device_cache[id]["radio_table"]
-                if uap_radio_table[0]["radio"] == "ng":
-                    radio = {"2": uap_radio_table[0], "5": uap_radio_table[1]}
-                else:
-                    radio = {"2": uap_radio_table[1], "5": uap_radio_table[0]}
+                radio = {}
+
+                for uap_radio in uap_radio_table:
+                    radio[uap_radio["radio"]] = uap_radio
                 for k, v in update_radio.items():
-                    if k[0] in radio:
-                        [radio_band, parameter] = [k[0], k[2::]]
+                    if k[:2] in radio:
+                        [radio_band, parameter] = [k[:2], k[3::]]
                         radio[radio_band][parameter] = v
                 id_and_radio[id] = uap_radio_table
-            if not args.dryrun and id_and_radio:
+            if id_and_radio:
                 for id, radio_table in id_and_radio.items():
                     try:
-                        result = site.put_device(id, radio_table=radio_table)
-                        if not result.is_ok:
-                            log.warning(f"Could not update UAP {device_cache[id]['name']}")
+                        if args.dryrun:
+                            log.info(f"Update UAP {live_uap_cache[id]['name']}, {radio_table}")
+                        else:
+                            result = site.put_device(id, radio_table=radio_table)
+                            if not result.is_ok:
+                                log.warning(f"Could not update UAP {device_cache[id]['name']}")
                     except UnifiApiError as e:
                         log.warning(f"Could not update UAP {device_cache[id]['name']}, {str(e)}")
         log.info(f"Done updating, {len(live_uaps)} UAPs")

@@ -1,0 +1,14 @@
+{
+  "groups": [
+    {"tag": "alle_ap_in_sum_lokaal", "items" : [
+      "UAP097-M203", "UAP099-M007-Z", "UAP098-M217", "UAP100-M121", "UAP101-M007-N", "UAP104-M210", "UAP103-M201", "UAP102-M113", "UAP105-M208", "UAP106-M204", "UAP108-M212", "UAP107-M209", "UAP110-M221", "UAP109-M211",
+  "UAP111_M004", "UAP112-M219", "UAP113-M001", "UAP115-M005", "UAP117-M006", "UAP122-M111", "UAP130-M110", "UAP128-M205", "UAP131-M117", "UAP129-M215", "UAP126-M106", "UAP133-M-KELDER", "UAP135-M102", "UAP132-M016", "UAP134-M103",
+  "UAP144-M125", "UAP140-M112", "UAP138-M114", "UAP139-M015", "UAP145-M122", "UAP143-M013", "UAP147-M123", "UAP137-M104", "UAP141-M014", "UAP136-M101", "UAP142-M105", "UAP148-M119"
+    ]}
+  ],
+  "settings":
+    {"alle_ap_in_sum_lokaal": [
+      {"setting":  "na_tx_power", "value":  "10", "active":  true},
+      {"setting":  "ng_tx_power", "value":  "9", "active":  true}
+    ]}
+}
