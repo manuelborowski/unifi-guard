@@ -1,11 +1,13 @@
-import os, pandas, sys, logging, logging.handlers, yaml, datetime
+import os, pandas, sys, logging, logging.handlers, yaml, datetime, requests, copy, glob
 import argparse, json
 from unifiapi.api import controller, UnifiApiError
 
 # 1.0 initial version
 # 1.1 added overwrite parameter, so that it is possible to define groups and set parameters on group-level.  Take radio 6e into account
+# 1.2 added correlation, i.e. get a list of clients, retreive the laptopname, get the student, get the class, get the classroom and check if it is connected to the ap wothin that room
 
-version = 1.1
+
+version = 1.2
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--save", help="Create the excel file", action="store_true")
@@ -13,6 +15,8 @@ parser.add_argument("--live", help="Check if there are differences between the c
 parser.add_argument("--overwrite", help="Use overwrite.json to overwrite parameters of selected AP's", action="store_true")
 parser.add_argument("--dryrun", help="Do not apply differences to the controller", action="store_true")
 parser.add_argument("--dump", help="Dump the devices in a json file", action="store_true")
+parser.add_argument("--dumpclients", help="Dump the clients in a json file", action="store_true")
+parser.add_argument("--correlate", help="Correlate AP's with connected laptops, based on schoolschedule", action="store_true")
 parser.add_argument("--version", help="Return version", action="store_true")
 args = parser.parse_args()
 
@@ -40,6 +44,17 @@ def init_api(site_code=None):
     return site
 
 
+def init_sdh():
+    config = {}
+    for filename in ('unifiapi.yaml', os.path.expanduser('~/.unifiapi_yaml')):
+        try:
+            config = yaml.safe_load(open(filename))["sdh"]
+            break
+        except:
+            pass
+    return config
+
+
 # get all devices from the controller (switches and uaps)
 def get_devices(site):
     try:
@@ -47,6 +62,17 @@ def get_devices(site):
         devices = sorted(devices, key=lambda x: x["_id"])
         log.info(f"Retreived {len(devices)} devices from UNIFI controller")
         return devices
+    except Exception as e:
+        log.error(f'{sys._getframe().f_code.co_name}: {e}')
+        raise e
+
+
+# get all clients from the controller
+def get_clients(site):
+    try:
+        clients = site.active_clients()
+        log.info(f"Retreived {len(clients)} clients from UNIFI controller")
+        return clients
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
         raise e
@@ -62,7 +88,7 @@ def get_filtered_uaps(devices):
         filtered_devices = []
         for d in devices:
             if "UAP" in d["name"]:
-                data ={"name": d["name"], "state": d["state"], "id": d["_id"]}
+                data ={"name": d["name"], "state": d["state"], "id": d["_id"], "mac": d["mac"]}
                 for r in d["radio_table"]:
                     prefix = r["radio"]
                     for p in radio_params:
@@ -89,6 +115,19 @@ if args.dump:
         with open("devices.json", "w") as jf:
             json.dump(flat_list, jf)
         log.info(f"Done dumping devices to json file, {len(flat_list)} devices")
+    except Exception as e:
+        log.error(f'{sys._getframe().f_code.co_name}: {e}')
+
+# Dump-clients the devices in a json file
+if args.dumpclients:
+    try:
+        log.info("Start dumping clients into json file")
+        site = init_api()
+        devices = get_clients(site)
+        flat_list = [d.data for d in devices]
+        with open("clients.json", "w") as jf:
+            json.dump(flat_list, jf)
+        log.info(f"Done dumping clients to json file, {len(flat_list)} clients")
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
 
@@ -213,3 +252,101 @@ if args.live:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
 
 
+time2lesrooster = [825, 915, 1020, 1110, 1200, 1300, 1350, 1455, 1545, 1635]
+dag2index = ["", "Maandag", "Dinsdag", "Woensdag", "Donderdag", "Vrijdag"]
+
+if args.correlate:
+    try:
+        log.info("Start Correlating clients with AP's, based on schoolschedule")
+        sdh_config = init_sdh()
+        hostname2student = {}
+        ret = requests.get(sdh_config["url"], headers={'x-api-key': sdh_config["key"]})
+        if ret.status_code == 200:
+            res = ret.json()
+            if res["status"]:
+                hostname2student = {d["computer"]: d for d in res["data"]}
+            else:
+                log.error(f"could not get info from SDH, {res['data']}")
+
+        if hostname2student:
+            lesrooster = {}
+            lesrooster_filenames = glob.glob("lesrooster*.txt")
+            for lesrooster_filename in lesrooster_filenames:
+                with open(lesrooster_filename, "r") as lfile:
+                    lesrooster_raw = lfile.readlines()
+                    # is it a schoolschedule
+                    if len(lesrooster_raw) > 0 and len(lesrooster_raw[0].split(",")) >= 8:
+                        # There are 2 types of schoolschedule files...
+                        if lesrooster_raw[0].split(",")[5] in dag2index:
+                            for item in lesrooster_raw:
+                                try:
+                                    [_, klas, _, _, lokaal, dag, uur, lengte] = item.replace("\"", '').split(",")
+                                    dag = dag2index.index(dag)
+                                    uur = int(uur.split("u")[0]) * 100 + int(uur.split("u")[1])
+                                    uur = time2lesrooster.index(uur) + 1
+                                    aantal_uren = int((int(lengte.split("u")[0]) * 60 + int(lengte.split("u")[1])) / 50)
+                                    klassen = klas.split("+ ")
+                                    lokalen = lokaal.split("+ ")
+                                    for i in range(aantal_uren):
+                                        for klas in klassen:
+                                            for lokaal in lokalen:
+                                                [dag, uur] = [int(dag), int(uur)]
+                                                if dag in lesrooster:
+                                                    if uur in lesrooster[dag]:
+                                                        lesrooster[dag][uur][klas] = lokaal
+                                                    else:
+                                                        lesrooster[dag][uur] = {klas: lokaal}
+                                                else:
+                                                    lesrooster[dag] = {uur: {klas: lokaal}}
+                                        uur += 1
+                                except Exception as e:
+                                    pass
+                        else:
+                            for item in lesrooster_raw:
+                                try:
+                                    [_, klas, _, _, lokaal, dag, uur, _, _] = item.replace("\"", '').split(",")
+                                    [dag, uur] = [int(dag), int(uur)]
+                                    if dag in lesrooster:
+                                        if uur in lesrooster[dag]:
+                                            lesrooster[dag][uur][klas] = lokaal
+                                        else:
+                                            lesrooster[dag][uur] = {klas: lokaal}
+                                    else:
+                                        lesrooster[dag] = {uur: {klas: lokaal}}
+                                except Exception as e:
+                                    pass
+
+            now = datetime.datetime.now()
+            day = now.weekday() + 1
+            key = now.hour * 100 + now.minute
+            rt = copy.copy(time2lesrooster)
+            rt.reverse()
+            for hour, entry in enumerate(rt):
+                if key >= entry:
+                    hour = len(rt) - hour
+                    break
+            else:
+                log.info("Not within school hours, break")
+                exit(0)
+            site = init_api()
+            devices = get_devices(site)
+            uaps = get_filtered_uaps(devices)
+            uap_mac2hostname = {u["mac"]: u["name"] for u in uaps}
+
+            valid_clients = []
+            clients = get_clients(site)
+            for client in clients:
+                if "hostname" in client.data and client.data["hostname"] in hostname2student:
+                    student = hostname2student[client.data["hostname"]]
+                    klascode = student["klascode"]
+                    if day in lesrooster and hour in lesrooster[day] and klascode in lesrooster[day][hour]:
+                        lokaal = lesrooster[day][hour][klascode]
+                        if lokaal[1] == ".":
+                            lokaal = "M" + lokaal.replace(".", "")
+                        uap_name = uap_mac2hostname[client["ap_mac"]].split("-")[1]
+                        valid_clients.append({"naam": student["naam"], "voornaam": student["voornaam"], "klas": klascode, "uap": uap_name, "lokaal": lokaal, "check": uap_name == lokaal})
+            data_frame = pandas.DataFrame(data=valid_clients)
+            data_frame.to_excel(f"correlatie-{now.strftime('%Y%m%d%H%M')}.xlsx", index=False)
+        log.info("Done")
+    except Exception as e:
+        log.error(f'{sys._getframe().f_code.co_name}: {e}')
