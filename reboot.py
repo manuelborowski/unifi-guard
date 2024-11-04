@@ -4,8 +4,10 @@ import os, sys, logging.handlers, yaml, argparse, json, subprocess
 # 5 1 * * * cd /home/ict/unifi-guard/; /home/ict/unifi-guard/venv/bin/python3 /home/ict/unifi-guard/reboot.py --force
 
 # 1.0 initial version
+# 1.1 get list of devices from yaml
 
-version = 1.0
+
+version = 1.1
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--reboot", help="Reboot the AP.  If not specified, return the date", action="store_true")
@@ -40,7 +42,7 @@ def start():
         optional = "-o StrictHostKeychecking=no" if args.force else ""
         log.info(f"SSH command: sshpass -p xxx ssh {config['login']}@yyyy {optional} {command}")
         for device in devices:
-            if device["model"] in ["U7NHD"]:
+            if device["model"] in config["types"]:
                 output = subprocess.Popen(f"ping -w 2 -c 1 {device['ip']}", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
                 out_string = output[0].decode("utf-8")[:-1]
                 if "1 received" in out_string:
