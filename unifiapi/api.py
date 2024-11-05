@@ -23,11 +23,6 @@ except BaseException:
             return partial(self.func, instance,
                            *(self.args or ()), **(self.keywords or {}))
 
-# Make input() work the same
-try:
-    input = raw_input
-except NameError:
-    pass
 
 # urllib
 from future.standard_library import install_aliases
@@ -58,8 +53,6 @@ from collections import UserList, UserDict
 from json import dumps
 import yaml
 import json
-import pkg_resources
-    
 
 
 logger = logging.getLogger("GUARD.API")
@@ -82,8 +75,8 @@ def dpi_to_cat_app(dpi_id):
     return int(dpi_id)>>16, int(dpi_id)&65536
 
 # FIXME: should be in data/
-DEVICES = json.load(open(pkg_resources.resource_filename('unifiapi','unifi_devices.json')))
-DPI = json.load(open(pkg_resources.resource_filename('unifiapi','unifi_dpi.json')), object_hook=jsonKeys2int)
+DEVICES = json.load(open('unifiapi/unifi_devices.json'))
+DPI = json.load(open('unifiapi/unifi_dpi.json'))
 
 def get_username_password(endpoint, username=None):
     # Query for interactive credentials
@@ -457,7 +450,8 @@ class UnifiClientBase(object):
             json=params,
             stream=stream,
             allow_redirects=False,
-            params=args)
+            params=args,
+            verify=False)
         if "password" in params:
             params["password"] = "xxx"
         logger.debug("%s %s <- %s", method, url, repr(params))

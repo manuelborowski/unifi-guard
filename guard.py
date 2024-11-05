@@ -5,9 +5,9 @@ from unifiapi.api import controller, UnifiApiError
 # 1.0 initial version
 # 1.1 added overwrite parameter, so that it is possible to define groups and set parameters on group-level.  Take radio 6e into account
 # 1.2 added correlation, i.e. get a list of clients, retreive the laptopname, get the student, get the class, get the classroom and check if it is connected to the ap wothin that room
+# G1.3: clean up unifiapi (ssl certificates and other)
 
-
-version = 1.2
+version = 1.3
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--save", help="Create the excel file", action="store_true")
