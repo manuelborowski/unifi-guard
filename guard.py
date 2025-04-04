@@ -6,8 +6,9 @@ from unifiapi.api import controller, UnifiApiError
 # 1.1 added overwrite parameter, so that it is possible to define groups and set parameters on group-level.  Take radio 6e into account
 # 1.2 added correlation, i.e. get a list of clients, retreive the laptopname, get the student, get the class, get the classroom and check if it is connected to the ap wothin that room
 # G1.3: clean up unifiapi (ssl certificates and other)
+# 1.4: small update
 
-version = 1.3
+version = 1.4
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--save", help="Create the excel file", action="store_true")
@@ -88,12 +89,11 @@ def get_filtered_uaps(devices):
         filtered_devices = []
         for d in devices:
             if "UAP" in d["name"]:
-                data ={"name": d["name"], "state": d["state"], "id": d["_id"], "mac": d["mac"]}
+                data ={"name": d["name"], "state": d["state"], "id": d["_id"], "mac": d["mac"], "model": d["model"]}
                 for r in d["radio_table"]:
                     prefix = r["radio"]
                     for p in radio_params:
                         data[f"{prefix}_{p[0]}"] = r[p[0]] if p[0] in r else p[1]
-                data.update({ "name": d["name"], "state": d["state"], "id": d["_id"]})
                 filtered_devices.append(data)
         log.info(f"Retreived {len(filtered_devices)} UAPS from UNIFI controller")
         return filtered_devices
