@@ -1,4 +1,4 @@
-import os, pandas, sys, logging, logging.handlers, yaml, datetime, requests, copy, glob
+import os, pandas, sys, logging, logging.handlers, yaml, datetime, requests, copy, glob, math
 import argparse, json
 from unifiapi.api import controller, UnifiApiError
 
@@ -7,8 +7,9 @@ from unifiapi.api import controller, UnifiApiError
 # 1.2 added correlation, i.e. get a list of clients, retreive the laptopname, get the student, get the class, get the classroom and check if it is connected to the ap wothin that room
 # G1.3: clean up unifiapi (ssl certificates and other)
 # 1.4: small update
+# 1.5: make it possible to change other-than-radio parameters
 
-version = 1.4
+version = 1.5
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--save", help="Create the excel file", action="store_true")
@@ -224,27 +225,34 @@ if args.live:
         if update_uaps:
             log.info("Start update LIVE UAPs")
             device_cache = {d["_id"]: d for d in devices}
-            id_and_radio = {}
+            id2parameters = {}
             for id, update_radio in update_uaps.items():
                 uap_radio_table = device_cache[id]["radio_table"]
                 radio = {}
+                id2parameters[id] = {}
 
                 for uap_radio in uap_radio_table:
                     radio[uap_radio["radio"]] = uap_radio
+                radio_update = False
                 for k, v in update_radio.items():
-                    if k[:2] in radio:
+                    if isinstance(v, float) and math.isnan(v): continue
+                    if len(k) > 4 and k[:2] in radio and k[3::] in radio[k[:2]]:
                         [radio_band, parameter] = [k[:2], k[3::]]
                         radio[radio_band][parameter] = v
-                id_and_radio[id] = uap_radio_table
-            if id_and_radio:
-                for id, radio_table in id_and_radio.items():
+                        radio_update = True
+                    else:
+                        id2parameters[id][k] = v
+                if radio_update:
+                    id2parameters[id]["radio_table"] = uap_radio_table
+            if id2parameters:
+                for id, fields in id2parameters.items():
                     try:
                         if args.dryrun:
-                            log.info(f"Update UAP {live_uap_cache[id]['name']}, {radio_table}")
+                            log.info(f"Update UAP {live_uap_cache[id]['name']}, {fields}")
                         else:
-                            result = site.put_device(id, radio_table=radio_table)
+                            result = site.put_device(id, **fields)
                             if not result.is_ok:
-                                log.warning(f"Could not update UAP {device_cache[id]['name']}")
+                                log.warning(f"Could not update UAP {device_cache[id]['name']}, fields {fields}")
                     except UnifiApiError as e:
                         log.warning(f"Could not update UAP {device_cache[id]['name']}, {str(e)}")
         log.info(f"Done updating, {len(live_uaps)} UAPs")
