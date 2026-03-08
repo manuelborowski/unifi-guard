@@ -1,3 +1,6 @@
+# Main purpose is to save applicable parameters of all AP's (band, signalstrength) to an excell file.
+# This file can be updated, after which the AP's can updated according the changes
+
 import os, pandas, sys, logging, logging.handlers, yaml, datetime, requests, copy, glob, math
 import argparse, json
 from unifiapi.api import controller, UnifiApiError
@@ -8,15 +11,17 @@ from unifiapi.api import controller, UnifiApiError
 # G1.3: clean up unifiapi (ssl certificates and other)
 # 1.4: small update
 # 1.5: make it possible to change other-than-radio parameters
+# 1.6: added disable.py (disable ap's) and client.py (block clients)
 
-version = 1.5
+version = 1.6
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--save", help="Create the excel file", action="store_true")
 parser.add_argument("--live", help="Check if there are differences between the controller and excel file and update the controller if required", action="store_true")
 parser.add_argument("--overwrite", help="Use overwrite.json to overwrite parameters of selected AP's", action="store_true")
 parser.add_argument("--dryrun", help="Do not apply differences to the controller", action="store_true")
-parser.add_argument("--dump", help="Dump the devices in a json file", action="store_true")
+# parser.add_argument("--dump", help="Dump the devices in a json file", action="store_true")
+parser.add_argument("--dump", help="no parameter, dump all devices, else dump devices with parameter in their name", nargs="?", const="ALL")
 parser.add_argument("--dumpclients", help="Dump the clients in a json file", action="store_true")
 parser.add_argument("--correlate", help="Correlate AP's with connected laptops, based on schoolschedule", action="store_true")
 parser.add_argument("--version", help="Return version", action="store_true")
@@ -113,8 +118,16 @@ if args.dump:
         site = init_api()
         devices = get_devices(site)
         flat_list = [d.data for d in devices]
-        with open("devices.json", "w") as jf:
-            json.dump(flat_list, jf)
+        with open(f"devices-{args.dump}.json", "w") as jf:
+            if args.dump == "ALL":
+                json.dump(flat_list, jf)
+            else:
+                devices = []
+                for device in flat_list:
+                    if args.dump in device["name"]:
+                        devices.append(device)
+                json.dump(devices, jf)
+
         log.info(f"Done dumping devices to json file, {len(flat_list)} devices")
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
