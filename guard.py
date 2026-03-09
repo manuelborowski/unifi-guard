@@ -12,8 +12,9 @@ from unifiapi.api import controller, UnifiApiError
 # 1.4: small update
 # 1.5: make it possible to change other-than-radio parameters
 # 1.6: added disable.py (disable ap's) and client.py (block clients)
+# 1.7: unified the scripts more.  Added command to show the status of the ap's
 
-version = 1.6
+version = 1.7
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--save", help="Create the excel file", action="store_true")

@@ -22,11 +22,19 @@ ping_parser =  subparser.add_parser("ping", help="x.x.x.x : ping x.x.x.x")
 ping_parser.add_argument("ip", help="IP address to ping")
 ping_parser.add_argument("-t", "--timeout", type=int, default=5, help="Timeout")
 
-klas_parser = subparser.add_parser("start", help="Iterate over a klas(sen)")
-klas_parser.add_argument("--klas", help="All klassen with this pattern will be considered")
-klas_parser.add_argument("--list", help="Yaml file with a list of klassen to be considered")
-klas_parser.add_argument("--timeout", type=int, default=5, help="Timeout per try")
-klas_parser.add_argument("--tries", type=int, default=5, help="Nbr of tries")
+client_parser = subparser.add_parser("client", help="Iterate over a klas(sen) and block/unblock students")
+client_parser.add_argument("--klas", help="All klassen with this pattern will be considered")
+client_parser.add_argument("--list", help="Yaml file with a list of klassen to be considered")
+client_parser.add_argument("--timeout", type=int, default=1, help="Timeout per try")
+client_parser.add_argument("--tries", type=int, default=25, help="Nbr of tries")
+
+ap_parser = subparser.add_parser("ap", help="Disable/Enable AP's matching name xxx")
+ap_parser.add_argument("name", help="NAME, AP's matching name xxx")
+ap_parser.add_argument("-e", "--enable", help="Enable AP's", action="store_true")
+ap_parser.add_argument("-d", "--disable", help="Disable AP's", action="store_true")
+
+ap_parser = subparser.add_parser("show", help="Show Status of AP's or Clients")
+ap_parser.add_argument("-a", "--ap", help="Show status AP's", action="store_true")
 
 parser.add_argument("--version", help="Return version", action="store_true")
 
@@ -64,6 +72,17 @@ def init_sdh():
             pass
     return config
 
+# get all devices from the controller (switches and uaps)
+def get_devices(site):
+    try:
+        devices = site.devices()
+        devices = sorted(devices, key=lambda x: x["_id"])
+        log.info(f"Retreived {len(devices)} devices from UNIFI controller")
+        return devices
+    except Exception as e:
+        log.error(f'{sys._getframe().f_code.co_name}: {e}')
+        raise e
+
 def ping(ip, timeout = 1):
     system = platform.system().lower()
     if system == "windows":
@@ -89,13 +108,13 @@ def block_client(mac, block=True):
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
 
-if args.command == "start":
+if args.command == "client":
     try:
         if args.list:
             with open(args.list, "r") as jf:
                 klas_list = yaml.load(jf, Loader=yaml.SafeLoader)
         elif args.klas:
-            with open("client-klas-list.yaml", "r") as jf:
+            with open("ddos-klas-list.yaml", "r") as jf:
                 klas_list = yaml.load(jf, Loader=yaml.SafeLoader)
                 klas_list = [k for k in klas_list if args.klas in k]
         else:
@@ -103,7 +122,7 @@ if args.command == "start":
         log.info(f"Nbr of tries {args.tries}, Timeout {args.timeout}")
         log.info(f"Start with klassen: {klas_list}")
 
-        with open("client-mac-list.yaml", "r") as yf:
+        with open("ddos-mac-list.yaml", "r") as yf:
             mac_list = yaml.load(yf, Loader=yaml.SafeLoader)
         klas2mac_addresses = {}
         for item in mac_list:
@@ -134,6 +153,23 @@ if args.command == "start":
         log.info(f"End, nbr clients: {nbr_clients}")
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
+
+if args.command == "ap":
+    try:
+        log.info(f"{"Disable" if args.disable else "Enable"} AP's")
+        site = init_api()
+        devices = []
+        with open("ddos-ap-list.yaml", "r") as jf:
+            all_devices = yaml.load(jf, Loader=yaml.SafeLoader)
+            for d in all_devices:
+                if args.name in d["name"]:
+                    devices.append(d)
+        for d in devices:
+            log.info(f"{"Disable" if args.disable else "Enable"} {d["name"]}")
+            site.put_device(d["id"], **{"disabled": args.disable})
+    except Exception as e:
+        log.error(f'{sys._getframe().f_code.co_name}: {e}')
+
 
 if args.command == "ping":
     try:
@@ -185,12 +221,40 @@ if args.command == "refresh":
             else:
                 log.error(f"could not get devices from Entra, {res['data']}")
         if mac_list:
-            with open("client-mac-list.yaml", "w") as jf:
+            with open("ddos-mac-list.yaml", "w") as jf:
                 yaml.dump(mac_list, jf)
         if klas_list:
             klas_list = list(set(klas_list))
             klas_list.sort(reverse=True)
-            with open("client-klas-list.yaml", "w") as jf:
+            with open("ddos-klas-list.yaml", "w") as jf:
                 yaml.dump(klas_list, jf)
+        log.info("Start dumping devices into json file")
+        site = init_api()
+        devices = get_devices(site)
+        flat_list = []
+        for d in devices:
+            if "UAP" not in d["name"]: continue # skip everything except AP's
+            flat = {"id": d.data["_id"], "state": d.data["state"], "name": d.data["name"]}
+            if "disabled" in d.data:
+                flat["disabled"] = d.data["disabled"]
+            flat_list.append(flat)
+        with open("ddos-ap-list.yaml", "w") as jf:
+            yaml.dump(flat_list, jf)
+        log.info(f"Done dumping devices to yaml file, {len(flat_list)} devices")
+    except Exception as e:
+        log.error(f'{sys._getframe().f_code.co_name}: {e}')
+
+# From entra, get a list of devices and students.  Correlate and save as yaml file, with as parameters, name, class and device mac address
+if args.command == "show":
+    try:
+        if args.ap:
+            log.info("Show disabled AP's")
+            site = init_api()
+            devices = get_devices(site)
+            for d in devices:
+                if "UAP" not in d["name"]: continue # skip everything except AP's
+                if "disabled" in d.data and d.data["disabled"]:
+                    log.info(f"AP Disabled: {d["name"]}")
+                    print(f"AP Disabled: {d["name"]}")
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
