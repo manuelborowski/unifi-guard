@@ -1,13 +1,11 @@
-# Disable/enable wireless clients
-# From entra, get a list of all students and all devices.  Match the devices with the students and save to config file
-# Extract the classes and save to seperate file
-# Loop over devices, associated with students, associated with given classes
-# For each device, block in Unifi Controller, count the number of successful pings.
-# The idea is that, during DDOS, all devices will timeout (0 successful pings) except for the malicious device
 
 import os, pandas, sys, logging, logging.handlers, yaml, datetime, requests, copy, glob, math
 import argparse, json, subprocess, platform
 from unifiapi.api import controller, UnifiApiError
+import time
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # 0.1 initial version, copy from guard.py
 
@@ -22,11 +20,19 @@ ping_parser =  subparser.add_parser("ping", help="x.x.x.x : ping x.x.x.x")
 ping_parser.add_argument("ip", help="IP address to ping")
 ping_parser.add_argument("-t", "--timeout", type=int, default=5, help="Timeout")
 
+speedtest_parser =  subparser.add_parser("speedtest", help="Start speedtest")
+speedtest_parser.add_argument("--max", type=int, default=100, help="Maximum bandwidth in mbps")
+speedtest_parser.add_argument("--duration", type=int, default=5, help="Test duration")
+speedtest_parser.add_argument("--timeout", type=int, default=5, help="Timeout")
+
 client_parser = subparser.add_parser("client", help="Iterate over a klas(sen) and block/unblock students")
 client_parser.add_argument("--klas", help="All klassen with this pattern will be considered")
 client_parser.add_argument("--list", help="Yaml file with a list of klassen to be considered")
+client_parser.add_argument("--scope", help="Test scope, do a speedtest per <student,klass,alles>.  Default <student>", default="student")
+client_parser.add_argument("--username", help="A student's username")
 client_parser.add_argument("--timeout", type=int, default=1, help="Timeout per try")
 client_parser.add_argument("--tries", type=int, default=25, help="Nbr of tries")
+client_parser.add_argument("--test", help="If set, do not block/unblock clients", default=False, action="store_true")
 
 ap_parser = subparser.add_parser("ap", help="Disable/Enable AP's matching name xxx")
 ap_parser.add_argument("name", help="NAME, AP's matching name xxx")
@@ -92,15 +98,59 @@ def ping(ip, timeout = 1):
     result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return result.returncode == 0
 
+def speedtest_download(
+    url: str = "https://fsn1-speed.hetzner.com/1GB.bin", max_mbps: float = 5.0, test_duration: float = 5.0, timeout: float = 5.0, chunk_size: int = 64 * 1024,) -> float:
+    session = requests.Session()
+    retries = Retry(total=3, connect=3, read=3, backoff_factor=1, allowed_methods=["GET", "HEAD"],)
+    session.mount("http://", HTTPAdapter(max_retries=retries))
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Connection": "close",
+        "Accept": "*/*",
+    }
+
+    start = time.perf_counter()
+    bytes_read = 0
+
+    try:
+        with session.get(url, stream=True, timeout=timeout, headers=headers) as r:
+            r.raise_for_status()
+
+            for chunk in r.iter_content(chunk_size=chunk_size):
+                if not chunk:
+                    continue
+
+                bytes_read += len(chunk)
+                elapsed = time.perf_counter() - start
+
+                if elapsed >= test_duration:
+                    break
+
+                target_elapsed = (bytes_read * 8) / (max_mbps * 1_000_000)
+                if target_elapsed > elapsed:
+                    time.sleep(target_elapsed - elapsed)
+
+    except requests.exceptions.RequestException as e:
+        return 0.0
+
+    elapsed = time.perf_counter() - start
+    if elapsed <= 0:
+        return 0.0
+    return (bytes_read * 8) / elapsed / 1_000_000
+
 if args.version:
     print(f"Current version is {version}")
 
-def block_client(mac, block=True):
+def unblock_client(site, mac):
+    return block_client(site, mac, block=False)
+
+def block_client(site, mac, block=True):
     try:
+        if args.test: return
         if not ":" in mac:
             mac = mac[0:2] + ":" + mac[2:4] + ":" + mac[4:6] + ":" + mac[6:8] + ":" + mac[8:10] + ":" + mac[10:12]
-        log.info(f"{"Block" if args.block else "Unblock"} Client {mac}")
-        site = init_api()
         if block:
             site.c_block_client(**{"mac": mac})
         else:
@@ -108,49 +158,85 @@ def block_client(mac, block=True):
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
 
+if args.command == "speedtest":
+    try:
+        log.info(f"Start speedtest, Max BW {args.max}, Duration {args.duration}, Timeout {args.timeout}")
+        speed = speedtest_download(max_mbps=args.max, test_duration=args.duration, timeout=args.timeout)
+        print(f"Speed is {speed}")
+    except Exception as e:
+        log.error(f'{sys._getframe().f_code.co_name}: {e}')
+
+def speedtest():
+    speeds = []
+    for tries in range(args.tries):
+        speeds.append(int(speedtest_download(test_duration=args.timeout, timeout=args.timeout)))
+    return speeds
+
 if args.command == "client":
     try:
+        log.info(f"Start with args : {args}")
+        klas_list = []
+        username = None
         if args.list:
-            with open(args.list, "r") as jf:
-                klas_list = yaml.load(jf, Loader=yaml.SafeLoader)
+            with open(args.list, "r") as lf:
+                klas_list = yaml.load(lf, Loader=yaml.SafeLoader)
         elif args.klas:
-            with open("ddos-klas-list.yaml", "r") as jf:
-                klas_list = yaml.load(jf, Loader=yaml.SafeLoader)
+            with open("ddos-klas-list.yaml", "r") as klf:
+                klas_list = yaml.load(klf, Loader=yaml.SafeLoader)
                 klas_list = [k for k in klas_list if args.klas in k]
-        else:
-            print("--klas of --list opgeven aub")
-        log.info(f"Nbr of tries {args.tries}, Timeout {args.timeout}")
-        log.info(f"Start with klassen: {klas_list}")
 
-        with open("ddos-mac-list.yaml", "r") as yf:
-            mac_list = yaml.load(yf, Loader=yaml.SafeLoader)
-        klas2mac_addresses = {}
-        for item in mac_list:
-            if item["klascode"] in klas2mac_addresses:
-                klas2mac_addresses[item["klascode"]].append(item)
-            else:
-                klas2mac_addresses[item["klascode"]] = [item]
-
-        # Iterate over klas_list, find the students and mac addresses and iterate over the students
         site = init_api()
-        nbr_clients = 0
-        for klas in klas_list:
-            mac_list = klas2mac_addresses[klas]
-            for item in mac_list:
-                # At this point, the DDOS is ongoing, so ping to 8.8.8.8 should timeout
-                # Block the client, send 4 (defaulr) pings with 5sec (default) timeout.  Count and display the number of successful pings.  Unblock the client
-                # The idea is that the number of successful pings is larger than 0 when the culprit is blocked
-                nbr_pings_ok = 0
-                mac = item["mac"]
-                if not ":" in mac:
-                    mac = mac[0:2] + ":" + mac[2:4] + ":" + mac[4:6] + ":" + mac[6:8] + ":" + mac[8:10] + ":" + mac[10:12]
-                site.c_block_client(**{"mac": mac})
-                for tries in range(args.tries):
-                    if ping("8.8.8.8", args.timeout): nbr_pings_ok += 1
-                log.info(f"Block {klas},{item["naam"]} {item["voornaam"]}, {mac}, pings({nbr_pings_ok})")
-                site.c_unblock_client(**{"mac": mac})
-                nbr_clients += 1
-        log.info(f"End, nbr clients: {nbr_clients}")
+        target_list = []
+        if klas_list or args.username:
+            with open("ddos-mac-list.json", "r") as mlf:
+                mac_list_all = json.load(mlf)
+
+            if klas_list:
+                klas2item = {}
+                for item in mac_list_all:
+                    if item["klascode"] in klas2item:
+                        klas2item[item["klascode"]].append(item)
+                    else:
+                        klas2item[item["klascode"]] = [item]
+                for klas in klas_list:
+                    target_list += [i for i in klas2item[klas]]
+            elif args.username:
+                for item in mac_list_all:
+                    if item["username"].lower() == args.username.lower():
+                        target_list = [item]
+                        break
+
+            nbr_clients = 0
+            if target_list:
+                current_klas = target_list[0]["klascode"]
+                blocked_macs = []
+                # scope: student -> block student, speedtest, unblock
+                # scope: klas -> block all students of said class, speedtest, unblock
+                # scope alles -> block all students of all classes, speedtest, unblock
+                for target in target_list:
+                    if args.scope == "klas" and current_klas != target["klascode"]:
+                        speeds = speedtest()
+                        log.info(f"Speedtest klas {current_klas}, {speeds}")
+                        for unblock in blocked_macs:
+                            unblock_client(site, unblock["mac"])
+                        current_klas = target["klascode"]
+                        blocked_macs = []
+                    blocked_macs.append(target)
+                    block_client(site, target["mac"])
+                    if args.scope == "student":
+                        speeds = speedtest()
+                        log.info(f"Speedtest student {target}, {speeds}")
+                        unblock_client(site, target["mac"])
+                        blocked_macs = []
+                if blocked_macs:
+                    speeds = speedtest()
+                    if args.scope == "klas":
+                        log.info(f"Speedtest klas {current_klas}, {speeds}")
+                    else:
+                        log.info(f"Speedtest over alles, {speeds}")
+                    for unblock in blocked_macs:
+                        unblock_client(site, unblock["mac"])
+            log.info(f"End, nbr clients: {len(target_list)}")
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
 
@@ -170,7 +256,6 @@ if args.command == "ap":
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
 
-
 if args.command == "ping":
     try:
         start = datetime.datetime.now()
@@ -189,10 +274,20 @@ def init_entra():
             pass
     return config
 
+def klas2klasgroep(klas):
+    if klas[0] == "O":
+        return klas
+    if klas[0] in ["1", "2"]:
+        return klas[:2]
+    if " " in klas:
+        return klas[:2]
+    return klas
+
 # From entra, get a list of devices and students.  Correlate and save as yaml file, with as parameters, name, class and device mac address
 if args.command == "refresh":
     try:
-        log.info("Start dumping student/mac address info into yaml file")
+        log.info("Start dumping student/mac address info into json/yaml file")
+        device2student = {}
         entra_config = init_entra()
         ret = requests.get(entra_config["url_student"], headers={'x-api-key': entra_config["key"]})
         if ret.status_code == 200:
@@ -210,19 +305,20 @@ if args.command == "refresh":
                 for device in res["data"]:
                     if device["device_name"] in device2student:
                         student = device2student[device["device_name"]]
+                        klascode = klas2klasgroep(student["klascode"])
                         mac_list.append({
-                            "klascode": student["klascode"],
+                            "klascode": klascode,
                             "username": student["username"],
                             "naam": student["naam"],
                             "voornaam": student["voornaam"],
                             "mac": device["mac"]
                         })
-                        klas_list.append(student["klascode"])
+                        klas_list.append(klascode)
             else:
                 log.error(f"could not get devices from Entra, {res['data']}")
         if mac_list:
-            with open("ddos-mac-list.yaml", "w") as jf:
-                yaml.dump(mac_list, jf)
+            with open("ddos-mac-list.json", "w") as jf:
+                json.dump(mac_list, jf)
         if klas_list:
             klas_list = list(set(klas_list))
             klas_list.sort(reverse=True)
