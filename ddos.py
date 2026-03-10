@@ -8,8 +8,9 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 # 0.1 initial version, copy from guard.py
+# 1.9: small rework
 
-version = 0.1
+version = 1.9
 
 parser = argparse.ArgumentParser()
 subparser = parser.add_subparsers(dest="command")
@@ -54,29 +55,19 @@ log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(me
 log_handler.setFormatter(log_formatter)
 log.addHandler(log_handler)
 
+with open('unifiapi.yaml', "r") as cf:
+    config = yaml.safe_load(cf)
+
+
 def init_api(site_code=None):
     ctrlr = controller()
     if not site_code:
-        profile_config = {}
-        for filename in ('unifiapi.yaml', os.path.expanduser('~/.unifiapi_yaml')):
-            try:
-                profile_config = yaml.safe_load(open(filename))["default"]
-                break
-            except:
-                pass
-        site_code = profile_config["site"]
+        site_code = config["default"]["site"]
     site = ctrlr.sites[site_code]()
     return site
 
 def init_sdh():
-    config = {}
-    for filename in ('unifiapi.yaml', os.path.expanduser('~/.unifiapi_yaml')):
-        try:
-            config = yaml.safe_load(open(filename))["sdh"]
-            break
-        except:
-            pass
-    return config
+    return config["sdh"]
 
 # get all devices from the controller (switches and uaps)
 def get_devices(site):
@@ -99,7 +90,7 @@ def ping(ip, timeout = 1):
     return result.returncode == 0
 
 def speedtest_download(
-    url: str = "https://fsn1-speed.hetzner.com/1GB.bin", max_mbps: float = 5.0, test_duration: float = 5.0, timeout: float = 5.0, chunk_size: int = 64 * 1024,) -> float:
+    max_mbps: float = 5.0, test_duration: float = 5.0, timeout: float = 5.0, chunk_size: int = 64 * 1024,) -> float:
     session = requests.Session()
     retries = Retry(total=3, connect=3, read=3, backoff_factor=1, allowed_methods=["GET", "HEAD"],)
     session.mount("http://", HTTPAdapter(max_retries=retries))
@@ -115,7 +106,7 @@ def speedtest_download(
     bytes_read = 0
 
     try:
-        with session.get(url, stream=True, timeout=timeout, headers=headers) as r:
+        with session.get(config["speedtest"]["url"], stream=True, timeout=timeout, headers=headers) as r:
             r.raise_for_status()
 
             for chunk in r.iter_content(chunk_size=chunk_size):
@@ -265,14 +256,7 @@ if args.command == "ping":
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
 
 def init_entra():
-    config = {}
-    for filename in ('unifiapi.yaml', os.path.expanduser('~/.unifiapi_yaml')):
-        try:
-            config = yaml.safe_load(open(filename))["entra"]
-            break
-        except:
-            pass
-    return config
+    return config["entra"]
 
 def klas2klasgroep(klas):
     if klas[0] == "O":
