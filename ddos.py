@@ -9,8 +9,9 @@ from urllib3.util.retry import Retry
 
 # 0.1 initial version, copy from guard.py
 # 1.9: small rework
+# 1.10: small rework
 
-version = 1.9
+version = 1.10
 
 parser = argparse.ArgumentParser()
 subparser = parser.add_subparsers(dest="command")
@@ -197,7 +198,6 @@ if args.command == "client":
                         target_list = [item]
                         break
 
-            nbr_clients = 0
             if target_list:
                 current_klas = target_list[0]["klascode"]
                 blocked_macs = []
@@ -209,11 +209,14 @@ if args.command == "client":
                         speeds = speedtest()
                         log.info(f"Speedtest klas {current_klas}, {speeds}")
                         for unblock in blocked_macs:
+                            log.info(f"Unblock client {unblock}")
                             unblock_client(site, unblock["mac"])
                         current_klas = target["klascode"]
                         blocked_macs = []
                     blocked_macs.append(target)
                     block_client(site, target["mac"])
+                    if args.scope in ["klas", "alles"]:
+                        log.info(f"Block client {target}")
                     if args.scope == "student":
                         speeds = speedtest()
                         log.info(f"Speedtest student {target}, {speeds}")
@@ -226,6 +229,7 @@ if args.command == "client":
                     else:
                         log.info(f"Speedtest over alles, {speeds}")
                     for unblock in blocked_macs:
+                        log.info(f"Unblock client {unblock}")
                         unblock_client(site, unblock["mac"])
             log.info(f"End, nbr clients: {len(target_list)}")
     except Exception as e:
