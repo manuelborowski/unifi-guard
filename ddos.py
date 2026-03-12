@@ -10,8 +10,9 @@ from urllib3.util.retry import Retry
 # 0.1 initial version, copy from guard.py
 # 1.9: small rework
 # 1.10: small rework
+# 1.11: small rework
 
-version = 1.10
+version = 1.11
 
 parser = argparse.ArgumentParser()
 subparser = parser.add_subparsers(dest="command")
@@ -23,9 +24,9 @@ ping_parser.add_argument("ip", help="IP address to ping")
 ping_parser.add_argument("-t", "--timeout", type=int, default=5, help="Timeout")
 
 speedtest_parser =  subparser.add_parser("speedtest", help="Start speedtest")
-speedtest_parser.add_argument("--max", type=int, default=100, help="Maximum bandwidth in mbps")
-speedtest_parser.add_argument("--duration", type=int, default=5, help="Test duration")
-speedtest_parser.add_argument("--timeout", type=int, default=5, help="Timeout")
+speedtest_parser.add_argument("--max", type=int, default=5, help="Maximum bandwidth in mbps")
+speedtest_parser.add_argument("--duration", type=int, default=1, help="Test duration")
+speedtest_parser.add_argument("--timeout", type=int, default=1, help="Timeout")
 
 client_parser = subparser.add_parser("client", help="Iterate over a klas(sen) and block/unblock students")
 client_parser.add_argument("--klas", help="All klassen with this pattern will be considered")
@@ -166,6 +167,7 @@ def speedtest():
 
 if args.command == "client":
     try:
+        print(f"Start with args : {args}")
         log.info(f"Start with args : {args}")
         klas_list = []
         username = None
@@ -207,8 +209,10 @@ if args.command == "client":
                 for target in target_list:
                     if args.scope == "klas" and current_klas != target["klascode"]:
                         speeds = speedtest()
+                        print(f"Speedtest klas {current_klas}, {speeds}")
                         log.info(f"Speedtest klas {current_klas}, {speeds}")
                         for unblock in blocked_macs:
+                            print(f"Unblock client {unblock}")
                             log.info(f"Unblock client {unblock}")
                             unblock_client(site, unblock["mac"])
                         current_klas = target["klascode"]
@@ -216,21 +220,27 @@ if args.command == "client":
                     blocked_macs.append(target)
                     block_client(site, target["mac"])
                     if args.scope in ["klas", "alles"]:
+                        print(f"Block client {target}")
                         log.info(f"Block client {target}")
                     if args.scope == "student":
                         speeds = speedtest()
+                        print(f"Speedtest student {target}, {speeds}")
                         log.info(f"Speedtest student {target}, {speeds}")
                         unblock_client(site, target["mac"])
                         blocked_macs = []
                 if blocked_macs:
                     speeds = speedtest()
                     if args.scope == "klas":
+                        print(f"Speedtest klas {current_klas}, {speeds}")
                         log.info(f"Speedtest klas {current_klas}, {speeds}")
                     else:
+                        print(f"Speedtest over alles, {speeds}")
                         log.info(f"Speedtest over alles, {speeds}")
                     for unblock in blocked_macs:
+                        print(f"Unblock client {unblock}")
                         log.info(f"Unblock client {unblock}")
                         unblock_client(site, unblock["mac"])
+            print(f"End, nbr clients: {len(target_list)}")
             log.info(f"End, nbr clients: {len(target_list)}")
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
