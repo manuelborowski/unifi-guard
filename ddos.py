@@ -11,8 +11,9 @@ from urllib3.util.retry import Retry
 # 1.9: small rework
 # 1.10: small rework
 # 1.11: small rework
+# 1.12: speedtest, set timeout to 2 secs
 
-version = 1.11
+version = 1.12
 
 parser = argparse.ArgumentParser()
 subparser = parser.add_subparsers(dest="command")
@@ -27,6 +28,7 @@ speedtest_parser =  subparser.add_parser("speedtest", help="Start speedtest")
 speedtest_parser.add_argument("--max", type=int, default=5, help="Maximum bandwidth in mbps")
 speedtest_parser.add_argument("--duration", type=int, default=1, help="Test duration")
 speedtest_parser.add_argument("--timeout", type=int, default=1, help="Timeout")
+speedtest_parser.add_argument("--tries", type=int, default=25, help="Nbr of tries")
 
 client_parser = subparser.add_parser("client", help="Iterate over a klas(sen) and block/unblock students")
 client_parser.add_argument("--klas", help="All klassen with this pattern will be considered")
@@ -94,7 +96,7 @@ def ping(ip, timeout = 1):
 def speedtest_download(
     max_mbps: float = 5.0, test_duration: float = 5.0, timeout: float = 5.0, chunk_size: int = 64 * 1024,) -> float:
     session = requests.Session()
-    retries = Retry(total=3, connect=3, read=3, backoff_factor=1, allowed_methods=["GET", "HEAD"],)
+    retries = Retry(total=2, connect=2, read=2, backoff_factor=1, allowed_methods=["GET", "HEAD"],)
     session.mount("http://", HTTPAdapter(max_retries=retries))
     session.mount("https://", HTTPAdapter(max_retries=retries))
 
@@ -133,6 +135,20 @@ def speedtest_download(
         return 0.0
     return (bytes_read * 8) / elapsed / 1_000_000
 
+def speedtest_loop(show_progress=False):
+    speeds = []
+    tries = 0
+    while tries < args.tries:
+        speed = int(speedtest_download(test_duration=args.timeout, timeout=args.timeout))
+        speeds.append(speed)
+        if (show_progress):
+            print(f"{speeds}", end="\r")
+        tries += 1
+        if speed == 0:
+            tries += 1
+    print()
+    return speeds
+
 if args.version:
     print(f"Current version is {version}")
 
@@ -153,17 +169,12 @@ def block_client(site, mac, block=True):
 
 if args.command == "speedtest":
     try:
-        log.info(f"Start speedtest, Max BW {args.max}, Duration {args.duration}, Timeout {args.timeout}")
-        speed = speedtest_download(max_mbps=args.max, test_duration=args.duration, timeout=args.timeout)
-        print(f"Speed is {speed}")
+        log.info(f"Start speedtest, {args.max}")
+        # speed = speedtest_download(max_mbps=args.max, test_duration=args.duration, timeout=args.timeout)
+        speeds = speedtest_loop(show_progress=True)
+        print(f"Speeds {speeds}")
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
-
-def speedtest():
-    speeds = []
-    for tries in range(args.tries):
-        speeds.append(int(speedtest_download(test_duration=args.timeout, timeout=args.timeout)))
-    return speeds
 
 if args.command == "client":
     try:
@@ -208,7 +219,7 @@ if args.command == "client":
                 # scope alles -> block all students of all classes, speedtest, unblock
                 for target in target_list:
                     if args.scope == "klas" and current_klas != target["klascode"]:
-                        speeds = speedtest()
+                        speeds = speedtest_loop(show_progress=True)
                         print(f"Speedtest klas {current_klas}, {speeds}")
                         log.info(f"Speedtest klas {current_klas}, {speeds}")
                         for unblock in blocked_macs:
@@ -223,13 +234,13 @@ if args.command == "client":
                         print(f"Block client {target}")
                         log.info(f"Block client {target}")
                     if args.scope == "student":
-                        speeds = speedtest()
+                        speeds = speedtest_loop(show_progress=True)
                         print(f"Speedtest student {target}, {speeds}")
                         log.info(f"Speedtest student {target}, {speeds}")
                         unblock_client(site, target["mac"])
                         blocked_macs = []
                 if blocked_macs:
-                    speeds = speedtest()
+                    speeds = speedtest_loop(show_progress=True)
                     if args.scope == "klas":
                         print(f"Speedtest klas {current_klas}, {speeds}")
                         log.info(f"Speedtest klas {current_klas}, {speeds}")
