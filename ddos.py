@@ -12,8 +12,9 @@ from urllib3.util.retry import Retry
 # 1.10: small rework
 # 1.11: small rework
 # 1.12: speedtest, set timeout to 2 secs
+# 1.13: clients, add option to disable/enable
 
-version = 1.12
+version = 1.13
 
 parser = argparse.ArgumentParser()
 subparser = parser.add_subparsers(dest="command")
@@ -36,6 +37,8 @@ client_parser.add_argument("--list", help="Yaml file with a list of klassen to b
 client_parser.add_argument("--scope", help="Test scope, do a speedtest per <student,klass,alles>.  Default <student>", default="student")
 client_parser.add_argument("--username", help="A student's username")
 client_parser.add_argument("--timeout", type=int, default=1, help="Timeout per try")
+client_parser.add_argument("--block", help="Block clients", action="store_true")
+client_parser.add_argument("--unblock", help="Unblock clients", action="store_true")
 client_parser.add_argument("--tries", type=int, default=25, help="Nbr of tries")
 client_parser.add_argument("--test", help="If set, do not block/unblock clients", default=False, action="store_true")
 
@@ -212,45 +215,56 @@ if args.command == "client":
                         break
 
             if target_list:
-                current_klas = target_list[0]["klascode"]
-                blocked_macs = []
-                # scope: student -> block student, speedtest, unblock
-                # scope: klas -> block all students of said class, speedtest, unblock
-                # scope alles -> block all students of all classes, speedtest, unblock
-                for target in target_list:
-                    if args.scope == "klas" and current_klas != target["klascode"]:
+                if args.block:
+                    for target in target_list:
+                        block_client(site, target["mac"])
+                        print(f"Block client {target}")
+                        log.info(f"Block client {target}")
+                elif args.unblock:
+                    for target in target_list:
+                        unblock_client(site, target["mac"])
+                        print(f"Unblock client {target}")
+                        log.info(f"Unblock client {target}")
+                else:
+                    current_klas = target_list[0]["klascode"]
+                    blocked_macs = []
+                    # scope: student -> block student, speedtest, unblock
+                    # scope: klas -> block all students of said class, speedtest, unblock
+                    # scope alles -> block all students of all classes, speedtest, unblock
+                    for target in target_list:
+                        if args.scope == "klas" and current_klas != target["klascode"]:
+                            speeds = speedtest_loop(show_progress=True)
+                            print(f"Speedtest klas {current_klas}, {speeds}")
+                            log.info(f"Speedtest klas {current_klas}, {speeds}")
+                            for unblock in blocked_macs:
+                                print(f"Unblock client {unblock}")
+                                log.info(f"Unblock client {unblock}")
+                                unblock_client(site, unblock["mac"])
+                            current_klas = target["klascode"]
+                            blocked_macs = []
+                        blocked_macs.append(target)
+                        block_client(site, target["mac"])
+                        if args.scope in ["klas", "alles"]:
+                            print(f"Block client {target}")
+                            log.info(f"Block client {target}")
+                        if args.scope == "student":
+                            speeds = speedtest_loop(show_progress=True)
+                            print(f"Speedtest student {target}, {speeds}")
+                            log.info(f"Speedtest student {target}, {speeds}")
+                            unblock_client(site, target["mac"])
+                            blocked_macs = []
+                    if blocked_macs:
                         speeds = speedtest_loop(show_progress=True)
-                        print(f"Speedtest klas {current_klas}, {speeds}")
-                        log.info(f"Speedtest klas {current_klas}, {speeds}")
+                        if args.scope == "klas":
+                            print(f"Speedtest klas {current_klas}, {speeds}")
+                            log.info(f"Speedtest klas {current_klas}, {speeds}")
+                        else:
+                            print(f"Speedtest over alles, {speeds}")
+                            log.info(f"Speedtest over alles, {speeds}")
                         for unblock in blocked_macs:
                             print(f"Unblock client {unblock}")
                             log.info(f"Unblock client {unblock}")
                             unblock_client(site, unblock["mac"])
-                        current_klas = target["klascode"]
-                        blocked_macs = []
-                    blocked_macs.append(target)
-                    block_client(site, target["mac"])
-                    if args.scope in ["klas", "alles"]:
-                        print(f"Block client {target}")
-                        log.info(f"Block client {target}")
-                    if args.scope == "student":
-                        speeds = speedtest_loop(show_progress=True)
-                        print(f"Speedtest student {target}, {speeds}")
-                        log.info(f"Speedtest student {target}, {speeds}")
-                        unblock_client(site, target["mac"])
-                        blocked_macs = []
-                if blocked_macs:
-                    speeds = speedtest_loop(show_progress=True)
-                    if args.scope == "klas":
-                        print(f"Speedtest klas {current_klas}, {speeds}")
-                        log.info(f"Speedtest klas {current_klas}, {speeds}")
-                    else:
-                        print(f"Speedtest over alles, {speeds}")
-                        log.info(f"Speedtest over alles, {speeds}")
-                    for unblock in blocked_macs:
-                        print(f"Unblock client {unblock}")
-                        log.info(f"Unblock client {unblock}")
-                        unblock_client(site, unblock["mac"])
             print(f"End, nbr clients: {len(target_list)}")
             log.info(f"End, nbr clients: {len(target_list)}")
     except Exception as e:
