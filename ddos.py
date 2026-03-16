@@ -15,8 +15,9 @@ from urllib3.util.retry import Retry
 # 1.13: clients, add option to disable/enable
 # 1.14: args.klas, consider only the classes that start with given argument
 # 1.15: ap, add option test
+# 1.16: ap, add leading - in name
 
-version = 1.15
+version = 1.16
 
 parser = argparse.ArgumentParser()
 subparser = parser.add_subparsers(dest="command")
@@ -45,7 +46,7 @@ client_parser.add_argument("--tries", type=int, default=25, help="Nbr of tries")
 client_parser.add_argument("--test", help="If set, do not block/unblock clients", default=False, action="store_true")
 
 ap_parser = subparser.add_parser("ap", help="Disable/Enable AP's matching name xxx")
-ap_parser.add_argument("name", help="NAME, AP's matching name xxx")
+ap_parser.add_argument("name", help="NAME, AP's matching name -xxx (a leading dash is added")
 ap_parser.add_argument("-e", "--enable", help="Enable AP's", action="store_true")
 ap_parser.add_argument("-d", "--disable", help="Disable AP's", action="store_true")
 ap_parser.add_argument("-t", "--test", help="If set, do not enable/disable", default=False, action="store_true")
@@ -292,7 +293,7 @@ if args.command == "ap":
         with open("ddos-ap-list.yaml", "r") as jf:
             all_devices = yaml.load(jf, Loader=yaml.SafeLoader)
             for d in all_devices:
-                if args.name in d["name"]:
+                if ("-" + args.name) in d["name"]:
                     devices.append(d)
         for d in devices:
             print(f"{"Disable" if args.disable else "Enable"} {d["name"]}")
