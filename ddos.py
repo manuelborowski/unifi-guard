@@ -13,8 +13,9 @@ from urllib3.util.retry import Retry
 # 1.11: small rework
 # 1.12: speedtest, set timeout to 2 secs
 # 1.13: clients, add option to disable/enable
+# 1.14: args.klas, consider only the classes that start with given argument
 
-version = 1.13
+version = 1.14
 
 parser = argparse.ArgumentParser()
 subparser = parser.add_subparsers(dest="command")
@@ -48,7 +49,8 @@ ap_parser.add_argument("-e", "--enable", help="Enable AP's", action="store_true"
 ap_parser.add_argument("-d", "--disable", help="Disable AP's", action="store_true")
 
 ap_parser = subparser.add_parser("show", help="Show Status of AP's or Clients")
-ap_parser.add_argument("-a", "--ap", help="Show status AP's", action="store_true")
+ap_parser.add_argument("-a", "--ap", help="Show disabled AP's", action="store_true")
+ap_parser.add_argument("-c", "--client", help="Show disabled clients", action="store_true")
 
 parser.add_argument("--version", help="Return version", action="store_true")
 
@@ -75,6 +77,15 @@ def init_api(site_code=None):
 
 def init_sdh():
     return config["sdh"]
+
+def get_clients(site):
+    try:
+        clients = site.active_clients()
+        log.info(f"Retreived {len(clients)} clients from UNIFI controller")
+        return clients
+    except Exception as e:
+        log.error(f'{sys._getframe().f_code.co_name}: {e}')
+        raise e
 
 # get all devices from the controller (switches and uaps)
 def get_devices(site):
@@ -138,6 +149,21 @@ def speedtest_download(
         return 0.0
     return (bytes_read * 8) / elapsed / 1_000_000
 
+def unblock_client(site, mac):
+    return block_client(site, mac, block=False)
+
+def block_client(site, mac, block=True):
+    try:
+        if args.test: return
+        if not ":" in mac:
+            mac = mac[0:2] + ":" + mac[2:4] + ":" + mac[4:6] + ":" + mac[6:8] + ":" + mac[8:10] + ":" + mac[10:12]
+        if block:
+            site.c_block_client(**{"mac": mac})
+        else:
+            site.c_unblock_client(**{"mac": mac})
+    except Exception as e:
+        log.error(f'{sys._getframe().f_code.co_name}: {e}')
+
 def speedtest_loop(show_progress=False):
     speeds = []
     tries = 0
@@ -154,21 +180,6 @@ def speedtest_loop(show_progress=False):
 
 if args.version:
     print(f"Current version is {version}")
-
-def unblock_client(site, mac):
-    return block_client(site, mac, block=False)
-
-def block_client(site, mac, block=True):
-    try:
-        if args.test: return
-        if not ":" in mac:
-            mac = mac[0:2] + ":" + mac[2:4] + ":" + mac[4:6] + ":" + mac[6:8] + ":" + mac[8:10] + ":" + mac[10:12]
-        if block:
-            site.c_block_client(**{"mac": mac})
-        else:
-            site.c_unblock_client(**{"mac": mac})
-    except Exception as e:
-        log.error(f'{sys._getframe().f_code.co_name}: {e}')
 
 if args.command == "speedtest":
     try:
@@ -191,7 +202,7 @@ if args.command == "client":
         elif args.klas:
             with open("ddos-klas-list.yaml", "r") as klf:
                 klas_list = yaml.load(klf, Loader=yaml.SafeLoader)
-                klas_list = [k for k in klas_list if args.klas in k]
+                klas_list = [k for k in klas_list if k.startswith(args.klas)]
 
         site = init_api()
         target_list = []
@@ -363,7 +374,6 @@ if args.command == "refresh":
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
 
-# From entra, get a list of devices and students.  Correlate and save as yaml file, with as parameters, name, class and device mac address
 if args.command == "show":
     try:
         if args.ap:
@@ -371,6 +381,17 @@ if args.command == "show":
             site = init_api()
             devices = get_devices(site)
             for d in devices:
+                if "UAP" not in d["name"]: continue # skip everything except AP's
+                if "disabled" in d.data and d.data["disabled"]:
+                    log.info(f"AP Disabled: {d["name"]}")
+                    print(f"AP Disabled: {d["name"]}")
+        if args.client:
+            with open("ddos-mac-list.json", "r") as mlf:
+                mac_list_all = json.load(mlf)
+            log.info("Show disabled AP's")
+            site = init_api()
+            clients = get_clients(site)
+            for d in clients:
                 if "UAP" not in d["name"]: continue # skip everything except AP's
                 if "disabled" in d.data and d.data["disabled"]:
                     log.info(f"AP Disabled: {d["name"]}")
