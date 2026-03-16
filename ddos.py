@@ -14,8 +14,9 @@ from urllib3.util.retry import Retry
 # 1.12: speedtest, set timeout to 2 secs
 # 1.13: clients, add option to disable/enable
 # 1.14: args.klas, consider only the classes that start with given argument
+# 1.15: ap, add option test
 
-version = 1.14
+version = 1.15
 
 parser = argparse.ArgumentParser()
 subparser = parser.add_subparsers(dest="command")
@@ -47,10 +48,11 @@ ap_parser = subparser.add_parser("ap", help="Disable/Enable AP's matching name x
 ap_parser.add_argument("name", help="NAME, AP's matching name xxx")
 ap_parser.add_argument("-e", "--enable", help="Enable AP's", action="store_true")
 ap_parser.add_argument("-d", "--disable", help="Disable AP's", action="store_true")
+ap_parser.add_argument("-t", "--test", help="If set, do not enable/disable", default=False, action="store_true")
 
-ap_parser = subparser.add_parser("show", help="Show Status of AP's or Clients")
-ap_parser.add_argument("-a", "--ap", help="Show disabled AP's", action="store_true")
-ap_parser.add_argument("-c", "--client", help="Show disabled clients", action="store_true")
+show_parser = subparser.add_parser("show", help="Show Status of AP's or Clients")
+show_parser.add_argument("-a", "--ap", help="Show disabled AP's", action="store_true")
+show_parser.add_argument("-c", "--client", help="Show disabled clients", action="store_true")
 
 parser.add_argument("--version", help="Return version", action="store_true")
 
@@ -283,7 +285,8 @@ if args.command == "client":
 
 if args.command == "ap":
     try:
-        log.info(f"{"Disable" if args.disable else "Enable"} AP's")
+        print(f"Start with args : {args}")
+        log.info(f"Start with args : {args}")
         site = init_api()
         devices = []
         with open("ddos-ap-list.yaml", "r") as jf:
@@ -292,8 +295,10 @@ if args.command == "ap":
                 if args.name in d["name"]:
                     devices.append(d)
         for d in devices:
+            print(f"{"Disable" if args.disable else "Enable"} {d["name"]}")
             log.info(f"{"Disable" if args.disable else "Enable"} {d["name"]}")
-            site.put_device(d["id"], **{"disabled": args.disable})
+            if not args.test:
+                site.put_device(d["id"], **{"disabled": args.disable})
     except Exception as e:
         log.error(f'{sys._getframe().f_code.co_name}: {e}')
 
